@@ -1,0 +1,36 @@
+services:
+  codex-api:
+    build: .
+    image: codex-api-server:latest
+    ports:
+      - "0.0.0.0:8000:8000"
+    environment:
+      - HOST=${HOST:-0.0.0.0}
+      - PORT=${PORT:-8000}
+      - DATABASE_PATH=${DATABASE_PATH:-/data/codex-api.db}
+      - API_KEY_PEPPER=${API_KEY_PEPPER}
+      - CODEX_AUTH_MODE=${CODEX_AUTH_MODE:-chatgpt}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - WORKSPACE_ROOT=${WORKSPACE_ROOT:-/workspaces}
+      - MAX_CONCURRENT_JOBS=${MAX_CONCURRENT_JOBS:-2}
+      - CODEX_REQUEST_TIMEOUT=${CODEX_REQUEST_TIMEOUT:-900}
+      - MAX_PROMPT_CHARS=${MAX_PROMPT_CHARS:-100000}
+      - CORS_ORIGINS=${CORS_ORIGINS:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./workspaces:/workspaces
+      - codex-data:/data
+      - codex-auth:/home/codex/.codex
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+    # Security: no privileged mode, no host network, no docker.sock,
+    # no host home/credential mounts. See README "Docker security".
+
+volumes:
+  codex-data:
+  codex-auth:
