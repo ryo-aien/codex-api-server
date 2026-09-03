@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA_STATEMENTS = [
     """
@@ -74,6 +74,20 @@ _SCHEMA_STATEMENTS = [
     "CREATE INDEX IF NOT EXISTS idx_audit_logs_client_id ON audit_logs(client_id)",
     "CREATE INDEX IF NOT EXISTS idx_audit_logs_repository ON audit_logs(repository)",
     "CREATE INDEX IF NOT EXISTS idx_audit_logs_timestamp ON audit_logs(timestamp)",
+    # schema v2: history-backed chat conversations (no repository; not tied to
+    # a workspace). Separate from codex_threads so the agent endpoints and the
+    # plain-chat endpoints never mix.
+    """
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+        conversation_id TEXT PRIMARY KEY,
+        owner_client_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        archived INTEGER NOT NULL DEFAULT 0,
+        last_turn_id TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_chat_conversations_owner ON chat_conversations(owner_client_id)",
 ]
 
 
@@ -92,5 +106,13 @@ def run_migrations(conn: sqlite3.Connection) -> None:
         if row is None:
             conn.execute(
                 "INSERT INTO schema_meta (id, schema_version) VALUES (1, ?)",
+                (SCHEMA_VERSION,),
+            )
+        elif row["schema_version"] < SCHEMA_VERSION:
+            # All statements above are CREATE TABLE/INDEX IF NOT EXISTS, so
+            # re-running them on an existing DB only adds the new objects.
+            # Bump the recorded version to match.
+            conn.execute(
+                "UPDATE schema_meta SET schema_version = ? WHERE id = 1",
                 (SCHEMA_VERSION,),
             )

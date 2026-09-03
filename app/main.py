@@ -24,7 +24,7 @@ from app.errors import (
 )
 from app.middleware import RequestContextMiddleware
 from app.repository import Repository
-from app.routes import account, health, me, threads
+from app.routes import account, chat, health, me, threads
 
 logging.basicConfig(level=get_settings().log_level)
 logger = logging.getLogger("app.main")
@@ -82,6 +82,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(me.router)
     app.include_router(account.router)
+    app.include_router(chat.router)
     app.include_router(threads.router)
 
     return app

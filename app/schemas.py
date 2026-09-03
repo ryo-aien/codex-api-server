@@ -22,6 +22,39 @@ class AccountResponse(BaseModel):
     auth_mode: str | None
 
 
+class ChatRequest(BaseModel):
+    prompt: str = Field(min_length=1)
+
+    @field_validator("prompt")
+    @classmethod
+    def _check_prompt(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("prompt must not be empty or whitespace-only")
+        return value
+
+
+class ChatResponse(BaseModel):
+    status: str
+    response: str | None
+
+
+class ChatConversationResponse(BaseModel):
+    conversation_id: str
+    status: str
+    response: str | None
+
+
+class ChatConversationListItem(BaseModel):
+    conversation_id: str
+    created_at: str
+    updated_at: str
+    archived: bool
+
+
+class ChatConversationListResponse(BaseModel):
+    conversations: list[ChatConversationListItem]
+
+
 class CreateThreadRequest(BaseModel):
     repository: str = Field(min_length=1, max_length=255)
     prompt: str = Field(min_length=1)

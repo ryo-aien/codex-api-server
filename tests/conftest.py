@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("API_KEY_PEPPER", "test-pepper-0123456789abcdef")
 os.environ.setdefault("CODEX_AUTH_MODE", "chatgpt")
 
-from app.codex.service import TurnOutcome
+from app.codex.service import ChatOutcome, ChatStartOutcome, TurnOutcome
 from app.concurrency import JobLimiter
 from app.config import Settings
 from app.db.connection import Database
@@ -49,12 +49,51 @@ class FakeCodexService:
         self.fail_with: Exception | None = None
         self.interrupted_threads: set[str] = set()
         self._account_status = {"authenticated": True, "auth_mode": "chatgpt"}
+        # conversation_id -> list of prompts, so tests can assert that resume
+        # carries prior context.
+        self.conversations: dict[str, list[str]] = {}
 
     def _new_thread_id(self) -> str:
         return f"thr_{next(self._thread_counter):06d}"
 
     def _new_turn_id(self) -> str:
         return f"turn_{next(self._turn_counter):06d}"
+
+    async def chat(self, *, prompt: str) -> ChatOutcome:
+        if self.sleep_seconds:
+            await asyncio.sleep(self.sleep_seconds)
+        if self.fail_with:
+            raise self.fail_with
+        return ChatOutcome(status="completed", response=f"reply: {prompt[:50]}")
+
+    async def chat_start(self, *, prompt: str) -> ChatStartOutcome:
+        if self.sleep_seconds:
+            await asyncio.sleep(self.sleep_seconds)
+        if self.fail_with:
+            raise self.fail_with
+        conversation_id = self._new_thread_id()
+        self.conversations[conversation_id] = [prompt]
+        return ChatStartOutcome(
+            conversation_id=conversation_id,
+            turn_id=self._new_turn_id(),
+            status="completed",
+            response=f"reply: {prompt[:50]}",
+        )
+
+    async def chat_resume(self, conversation_id: str, *, prompt: str) -> ChatOutcome:
+        if self.sleep_seconds:
+            await asyncio.sleep(self.sleep_seconds)
+        if self.fail_with:
+            raise self.fail_with
+        history = self.conversations.setdefault(conversation_id, [])
+        history.append(prompt)
+        # Echo how many turns this conversation has seen, so tests can assert
+        # that context (the prior turns) is retained across resume.
+        return ChatOutcome(
+            status="completed",
+            response=f"reply({len(history)} turns): {prompt[:50]}",
+            turn_id=self._new_turn_id(),
+        )
 
     async def start_thread(self, *, cwd: str, prompt: str) -> TurnOutcome:
         if self.sleep_seconds:

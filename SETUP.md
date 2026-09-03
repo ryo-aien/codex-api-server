@@ -51,39 +51,63 @@ docker compose build
 
 **この手順を飛ばすと `/v1/threads` などの Codex 実行が失敗します。必ず一度実行してください。**
 
-このサーバーは、バックエンドの Codex が ChatGPT / OpenAI にログイン済みでないと、Codex を呼び出すエンドポイントが失敗します。デフォルトは `CODEX_AUTH_MODE=chatgpt` で、既存の Codex 認証セッションがあれば再利用し、初回は Device Code login を使用します。
+このサーバーは、バックエンドの Codex が ChatGPT / OpenAI にログイン済みでないと、Codex を呼び出すエンドポイントが失敗します。デフォルトは `CODEX_AUTH_MODE=chatgpt` です。
 
-### ログイン手順 (ChatGPT / Device Code)
+このプロジェクトでは、**ホストPCの `~/.codex/auth.json` という認証ファイル1つだけを、コンテナに read-only でバインドマウント**します。つまり **ホストPCで `codex login` を済ませておけば、その認証がそのままコンテナに反映されます。** コンテナ内でブラウザを開いたり device code を入力したりする必要はありません。
 
-1. Codex ログインコマンドを実行します。`run --rm` を使うのは、ログインだけを一時コンテナで行い、認証情報を永続 volume (`codex-auth`) に書き込むためです。
+Codex ランタイムは起動時に sqlite やログを書き込みますが、それらは **コンテナ専用のボリューム (`codex-home`) に書かれ、ホストの `~/.codex` には一切書き込まれません。** ホストから渡すのは `auth.json` 1ファイル(読み取り専用)だけです。
+
+### ログイン手順 (ChatGPT / ホストPCでログイン)
+
+前提: ホストPCに codex CLI がインストールされていること。
+
+1. ホストPCで通常どおりログインします。ホストのブラウザが自動で開くので、そのまま ChatGPT ログインを完了してください。
 
    ```bash
-   docker compose run --rm codex-api python -m cli.codex_auth login
+   codex login
    ```
 
-2. すると以下のように **Verification URL** と **Code** が表示されます。
+   完了すると、ホストの `~/.codex/`(正確には `$CODEX_HOME`、デフォルト `~/.codex`)に `auth.json` が作成されます。ホスト側でログイン状態を確認するには:
 
-   ```text
-   Verification URL:
-   https://auth.openai.com/device
-
-   Code:
-   ABCD-1234
-
-   Waiting for login to complete...
+   ```bash
+   codex login status
+   # または
+   ls -l ~/.codex/auth.json
    ```
 
-3. **PC やスマホのブラウザで Verification URL を開き、表示された Code を入力**して、ChatGPT アカウントでログインを承認します。
+2. `.env` に、ホストの `~/.codex` **ディレクトリの絶対パス**を設定します。docker compose は `~` を展開しないため、必ず絶対パスで書いてください。
 
-4. 承認が完了すると、コマンド側に `Login successful.` と表示されて終了します。認証情報は named volume `codex-auth` (`/home/codex/.codex`) に保存され、コンテナを再起動・再ビルドしても保持されます。
+   ```env
+   # macOS の例（ユーザー名が ryo の場合）
+   CODEX_AUTH_HOST_DIR=/Users/ryo/.codex
+   # Linux の例（ユーザー名が youruser の場合）
+   # CODEX_AUTH_HOST_DIR=/home/youruser/.codex
+   ```
 
-5. ログイン状態は次のコマンドで確認できます(token や email は表示しません)。
+   自分のパスは次で確認できます:
+
+   ```bash
+   echo "$HOME/.codex"
+   ```
+
+   > **注意:** ここに指定するのは**ディレクトリ**です。**末尾に `/auth.json` を付けないでください。**
+   > compose 側で `${CODEX_AUTH_HOST_DIR}/auth.json` と付与しているため、`/auth.json` まで書くとパスが二重(`.../auth.json/auth.json`)になり、Docker が空ディレクトリを作って認証が読めなくなります(コンテナ内の `auth.json` がディレクトリ扱いになる場合はこれが原因です)。
+
+3. コンテナ側からログイン状態を確認します(token や email は表示しません)。
 
    ```bash
    docker compose run --rm codex-api python -m cli.codex_auth status
    # authenticated: True
    # auth_mode: chatgpt
    ```
+
+   ここが `authenticated: True` になっていれば、`docker compose up -d` した本体でも認証済みになります。
+
+> 補足:
+> - バインドするのは `auth.json` 1ファイルのみ・read-only です。コンテナはこのファイルを読み取るだけで書き換えません。Codex の作業用 sqlite/ログはコンテナ専用ボリューム (`codex-home`) に書かれ、ホストの `~/.codex` は汚れません。
+> - `auth.json` はホスト側に**必ず存在**している必要があります(先に `codex login` を済ませること)。存在しないと、Docker がその場所をディレクトリとして作ってしまい、認証が読めません。
+> - トークンの再取得が必要になった場合は、ホストPCで `codex login` をやり直せば、次回のコンテナ起動時に反映されます。
+> - ホスト側の `~/.codex/auth.json` は秘密情報なので取り扱いに注意してください。
 
 ### ログイン手順 (OpenAI API key / fallback)
 
@@ -94,7 +118,7 @@ CODEX_AUTH_MODE=api_key
 OPENAI_API_KEY=sk-...
 ```
 
-この場合、サーバー起動時に `codex.login_api_key()` が自動で実行されるため、上記の device code ログインは不要です(明示的にログインしたい場合は `docker compose run --rm codex-api python -m cli.codex_auth login` でも実行できます)。
+この場合、サーバー起動時に `codex.login_api_key()` が自動で実行されるため、上記のホストログイン／バインドは不要です。
 
 ---
 
@@ -147,29 +171,64 @@ docker compose exec codex-api python -m cli.api_keys create alice
 
 ## 6. LAN利用例
 
-Server IP を `192.168.1.100` とします。
+### サーバーの LAN IP を確認する
+
+以降の例では、サーバーの LAN IP を **`$SERVER_IP`** というシェル変数で表します。まず自分のサーバーの LAN IP を調べて、この変数に入れてください。
+
+- macOS:
+
+  ```bash
+  SERVER_IP=$(ipconfig getifaddr en0)   # Wi-Fi。有線なら en1
+  ```
+
+- Linux:
+
+  ```bash
+  SERVER_IP=$(hostname -I | awk '{print $1}')
+  ```
+
+設定できたか確認します:
+
+```bash
+echo "$SERVER_IP"        # 例: 192.168.1.42 のように表示される
+```
+
+> `SERVER_IP` は今開いているターミナル内だけで有効な一時変数です(ファイルには保存されません)。ターミナルを開き直したら、もう一度上のコマンドで設定してください。
+
+まず**サーバー自身**から、その IP で疎通するか確認します:
+
+```bash
+curl "http://$SERVER_IP:8000/health"
+# {"status":"ok",...} が返れば LAN 公開 OK。以降は他PCからも http://<このIP>:8000 でアクセスできます
+```
+
+> `127.0.0.1` は「同じPC内からのみ」アクセスできるアドレスです。他のPCから使うには、上で調べた `192.168.x.x` の LAN IP を使ってください。
+>
+> 繋がらない場合は、下記「[トラブルシュート](#トラブルシュート)」の LAN 疎通の項を参照してください。
+
+以降の例はこの `$SERVER_IP` をそのまま使っています。**同じターミナルで**続けて実行してください(他PCから叩くときは、`$SERVER_IP` を実際の IP に置き換えてください)。
 
 ### Health (認証不要)
 
 ```bash
-curl http://192.168.1.100:8000/health
+curl "http://$SERVER_IP:8000/health"
 ```
 
 ### /v1/me
 
 ```bash
 curl -H "Authorization: Bearer $CODEX_SERVER_KEY" \
-  http://192.168.1.100:8000/v1/me
+  "http://$SERVER_IP:8000/v1/me"
 ```
 
 ### 新規thread
 
 ```bash
-curl -X POST http://192.168.1.100:8000/v1/threads \
+curl -X POST "http://$SERVER_IP:8000/v1/threads" \
   -H "Authorization: Bearer $CODEX_SERVER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
-    "repository":"my-project",
+    "repository":"test",
     "prompt":"このリポジトリを調査してください"
   }'
 ```
@@ -177,7 +236,7 @@ curl -X POST http://192.168.1.100:8000/v1/threads \
 ### thread継続 (repositoryはthread metadataから自動解決)
 
 ```bash
-curl -X POST http://192.168.1.100:8000/v1/threads/THREAD_ID/messages \
+curl -X POST "http://$SERVER_IP:8000/v1/threads/THREAD_ID/messages" \
   -H "Authorization: Bearer $CODEX_SERVER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -188,7 +247,7 @@ curl -X POST http://192.168.1.100:8000/v1/threads/THREAD_ID/messages \
 ### Streaming
 
 ```bash
-curl -N -X POST http://192.168.1.100:8000/v1/threads/THREAD_ID/stream \
+curl -N -X POST "http://$SERVER_IP:8000/v1/threads/THREAD_ID/stream" \
   -H "Authorization: Bearer $CODEX_SERVER_KEY" \
   -H "Content-Type: application/json" \
   -d '{
@@ -210,40 +269,60 @@ docker compose exec codex-api python -m cli.audit list --client-id alice --limit
 
 ---
 
-## トラブルシュート
 
-### `{"detail":"Internal server error."}` が返る
+### LAN の他PCから繋がらない / `192.168.x.x` で接続できない
 
-このメッセージは本サーバーの統一エラースキーマ(`{"error":{"code":...}}`)**ではなく**、アプリのリクエストハンドラに到達する前に返る Starlette / FastAPI のデフォルト応答です。典型的な原因は次のとおりです。
+まず切り分けます。
 
-- **バックエンド Codex が起動に失敗している**: 最も多い原因です。`CODEX_HOME`(コンテナ内 `/home/codex/.codex`)ディレクトリが存在しない、あるいは Codex ランタイムがログインできず、FastAPI の起動処理(lifespan)自体が失敗している状態です。
+1. **サーバー自身**で `127.0.0.1` は繋がるか。
 
-  対処:
+   ```bash
+   curl http://127.0.0.1:8000/health
+   ```
 
-  1. ログを確認します。`TransportClosedError` や `CODEX_HOME ... does not exist` が出ていないか見てください。
+   これが返らないなら、そもそもサーバーが起動できていません(上のトラブルシュート参照)。
 
-     ```bash
-     docker compose logs --tail=100 codex-api
-     ```
+2. **サーバー自身**で、自分の LAN IP では繋がるか。
 
-  2. 上記「3. Codex login」に従って Codex ログインを完了させます。
-  3. サーバーを再起動します。
+   ```bash
+   SERVER_IP=$(ipconfig getifaddr en0)   # macOS。Linux は hostname -I の先頭
+   echo "$SERVER_IP"
+   curl "http://$SERVER_IP:8000/health"
+   ```
 
-     ```bash
-     docker compose up -d --force-recreate
-     ```
+   - 繋がる → サーバーは LAN 公開できています。他PCからは `http://<この $SERVER_IP の値>:8000` を使ってください。
+   - 繋がらない → 3 へ。
 
-- **Codex はログイン済みだが、prompt 実行時に上流が失敗している**: この場合はアプリのハンドラに到達しているため、`{"detail":...}` ではなく `{"error":{"code":"codex_error",...}}` (HTTP 502) や `{"error":{"code":"codex_unavailable",...}}` (HTTP 503) が返ります。`codex_error` で `401 Unauthorized ... api.openai.com` のようなメッセージが出る場合は、Codex のログインが切れているので再ログインしてください。
+3. **ポートが全インターフェースで公開されているか**確認します。
 
-補足: `docker` を使わずローカルで直接 `uvicorn` を起動して試す場合も、`CODEX_HOME` を実在するディレクトリに設定し、`python -m cli.codex_auth login` でログインを済ませてから起動してください。ディレクトリが無いと Codex ランタイムが起動に失敗します。
+   ```bash
+   docker compose port codex-api 8000
+   # 0.0.0.0:8000 と出れば OK。127.0.0.1:8000 だとローカル限定
+   ```
+
+4. **ホストのファイアウォール**を確認します。
+
+   - macOS: システム設定 → ネットワーク → ファイアウォール。オンだと外部からの 8000 番接続がブロックされることがあります。LAN テスト中は一時的にオフにするか、接続を許可してください。
+   - Linux: `ufw` や `firewalld` で TCP 8000 を LAN サブネットから許可してください(README「LAN公開 / Firewall / CORS」参照)。
+
+5. 他PCと**同じLAN/サブネットにいるか**、Wi-Fi のゲストネットワーク分離(AP アイソレーション)が有効になっていないかも確認してください。
+
+> なお、繋がらないときに `docker compose up -d` を繰り返しても状況は変わりません。接続失敗(curl の timeout)はネットワーク/ファイアウォール側の問題で、サーバー自体は起動したままです。
 
 ### 認証の永続化について
 
-Codex runtime (codex-cli) は `CODEX_HOME` 環境変数が指すディレクトリ(デフォルト `~/.codex`)に認証情報を保存します。本サーバーでは Dockerfile 内で `CODEX_HOME=/home/codex/.codex` を設定し、named volume `codex-auth` でこのディレクトリを永続化しています。そのためコンテナを再起動・再ビルドしてもログインは保持されます。
+Codex runtime (codex-cli) は `CODEX_HOME`(コンテナ内 `/home/codex/.codex`)に、認証だけでなく起動時に作業用の sqlite/ログも書き込みます。そのため本サーバーでは次のように分離しています。
 
 ```yaml
 volumes:
-  - codex-auth:/home/codex/.codex
+  # Codex の作業用 sqlite/ログはコンテナ専用ボリュームへ（ホストには書かない）
+  - codex-home:/home/codex/.codex
+  # ホストの auth.json 1ファイルだけを read-only でバインド
+  - ${CODEX_AUTH_HOST_DIR}/auth.json:/home/codex/.codex/auth.json:ro
 ```
 
-`codex-data` (SQLite) と `codex-auth` (Codex/ChatGPT認証) は明確に分離されています。
+- 認証は**ホストの `auth.json` 1ファイル**(read-only)から。ホストで `codex login` し直せば次回起動時に反映されます。
+- Codex の作業状態はコンテナ専用ボリューム `codex-home` に入り、ホストの `~/.codex` を汚しません。
+- 本アプリの SQLite (クライアント/APIキー/監査ログ) は別ボリューム `codex-data` (`/data`) に保存され、Codex 認証/状態とは明確に分離されています。
+
+> `.env` の `CODEX_AUTH_HOST_DIR` には**ディレクトリ**(例 `/Users/youruser/.codex`)を指定してください。末尾に `/auth.json` を付けないこと(compose 側で付与しています)。付けると存在しないパスになり、Docker が空ディレクトリを作って認証が読めなくなります。

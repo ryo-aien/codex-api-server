@@ -39,6 +39,11 @@ class ThreadBusyError(ApiError):
         super().__init__(409, "thread_busy", message)
 
 
+class ConversationNotFoundError(ApiError):
+    def __init__(self, message: str = "Conversation not found") -> None:
+        super().__init__(404, "conversation_not_found", message)
+
+
 class InvalidRequestApiError(ApiError):
     def __init__(self, message: str = "Invalid request") -> None:
         super().__init__(400, "invalid_request", message)

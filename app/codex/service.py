@@ -35,8 +35,29 @@ class TurnOutcome:
     response: str | None
 
 
+@dataclass(frozen=True)
+class ChatOutcome:
+    status: str
+    response: str | None
+    turn_id: str | None = None
+
+
+@dataclass(frozen=True)
+class ChatStartOutcome:
+    conversation_id: str
+    turn_id: str
+    status: str
+    response: str | None
+
+
 class CodexServiceProtocol(Protocol):
     """Interface the routes depend on, so tests can substitute a fake."""
+
+    async def chat(self, *, prompt: str) -> ChatOutcome: ...
+
+    async def chat_start(self, *, prompt: str) -> ChatStartOutcome: ...
+
+    async def chat_resume(self, conversation_id: str, *, prompt: str) -> ChatOutcome: ...
 
     async def start_thread(self, *, cwd: str, prompt: str) -> TurnOutcome: ...
 
@@ -93,6 +114,72 @@ class CodexService:
                 lock = asyncio.Lock()
                 self._thread_locks[thread_id] = lock
             return lock
+
+    async def chat(self, *, prompt: str) -> ChatOutcome:
+        """Plain conversational turn, not tied to any repository.
+
+        Started without a working directory and with the most restrictive
+        sandbox/approval so the model just answers instead of touching the
+        filesystem or running commands. The thread is ephemeral: no ownership
+        row is stored and it is not resumable via the /v1/threads endpoints.
+        """
+        thread = await self._codex.thread_start(
+            sandbox=Sandbox.read_only,
+            approval_mode=ApprovalMode.deny_all,
+            ephemeral=True,
+        )
+        try:
+            result = await thread.run(prompt)
+        except RuntimeError as exc:
+            raise CodexTurnFailedError(str(exc)) from exc
+        return ChatOutcome(
+            status=result.status.value if hasattr(result.status, "value") else str(result.status),
+            response=result.final_response,
+        )
+
+    async def chat_start(self, *, prompt: str) -> ChatStartOutcome:
+        """Start a history-backed chat conversation (no repository).
+
+        Unlike chat(), this is NOT ephemeral: the thread persists so it can be
+        resumed later via chat_resume(), giving the client a conversation that
+        remembers previous turns. Still read-only / deny-all so it stays a
+        plain chat and never touches the filesystem.
+        """
+        thread = await self._codex.thread_start(
+            sandbox=Sandbox.read_only,
+            approval_mode=ApprovalMode.deny_all,
+        )
+        lock = await self._lock_for(thread.id)
+        async with lock:
+            try:
+                result = await thread.run(prompt)
+            except RuntimeError as exc:
+                raise CodexTurnFailedError(str(exc)) from exc
+        return ChatStartOutcome(
+            conversation_id=thread.id,
+            turn_id=result.id,
+            status=result.status.value if hasattr(result.status, "value") else str(result.status),
+            response=result.final_response,
+        )
+
+    async def chat_resume(self, conversation_id: str, *, prompt: str) -> ChatOutcome:
+        """Continue an existing chat conversation so context carries over."""
+        lock = await self._lock_for(conversation_id)
+        async with lock:
+            thread = await self._codex.thread_resume(
+                conversation_id,
+                sandbox=Sandbox.read_only,
+                approval_mode=ApprovalMode.deny_all,
+            )
+            try:
+                result = await thread.run(prompt)
+            except RuntimeError as exc:
+                raise CodexTurnFailedError(str(exc)) from exc
+        return ChatOutcome(
+            status=result.status.value if hasattr(result.status, "value") else str(result.status),
+            response=result.final_response,
+            turn_id=result.id,
+        )
 
     async def start_thread(self, *, cwd: str, prompt: str) -> TurnOutcome:
         thread = await self._codex.thread_start(

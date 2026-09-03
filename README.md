@@ -326,14 +326,24 @@ docker compose exec codex-api python -m cli.audit list --repository project-a --
 
 ### 認証の永続化
 
-Codex runtime (codex-cli) は `CODEX_HOME` 環境変数が指すディレクトリ(デフォルト `~/.codex`)に認証情報を保存します。これは実際に `codex doctor` を実行して確認した挙動です。本サーバーでは Dockerfile 内で `CODEX_HOME=/home/codex/.codex` を明示的に設定し、`codex-auth` という named volume でこのディレクトリを永続化しています。
+Codex runtime (codex-cli) は `CODEX_HOME` 環境変数が指すディレクトリ(デフォルト `~/.codex`)に**認証情報だけでなく、起動時に作業用の sqlite / ログ (`state_*.sqlite`, `logs_*.sqlite`, `installation_id` 等) も書き込みます**。これは実際に確認した挙動で、そのため **`CODEX_HOME` は書き込み可能である必要があります**(read-only にすると「failed to initialize sqlite state runtime」で Codex ランタイムの起動に失敗します)。本サーバーでは Dockerfile 内で `CODEX_HOME=/home/codex/.codex` を設定しています。
+
+そこで本サーバーは、認証と作業状態を次のように分離しています。
 
 ```yaml
 volumes:
-  - codex-auth:/home/codex/.codex
+  # Codex の作業用 sqlite/ログはコンテナ専用ボリュームへ（ホストには書かない）
+  - codex-home:/home/codex/.codex
+  # ホストの auth.json 1ファイルだけを read-only でバインド
+  # CODEX_AUTH_HOST_DIR は .env で設定 (例: /home/youruser/.codex)
+  - ${CODEX_AUTH_HOST_DIR}/auth.json:/home/codex/.codex/auth.json:ro
 ```
 
-`codex-data` (SQLite) と `codex-auth` (Codex/ChatGPT認証) は明確に分離されています。
+- **`CODEX_HOME` 自体はコンテナ専用の named volume (`codex-home`)** にして書き込み可能にしています。Codex の sqlite/ログはここに書かれ、**ホストの `~/.codex` には一切書き込まれません**。
+- **認証は `auth.json` 1ファイルだけ**をホストから read-only でバインドします。ホストで `codex login` を済ませておけばコンテナに反映され、`user:` を変更しないため `/data` 等の書き込み権限にも影響しません。
+- SQLite (本アプリのDB) は別の named volume `codex-data` (`/data`) に保存され、Codex 認証/状態とは明確に分離されています。
+
+ログイン手順の詳細は [SETUP.md](./SETUP.md) を参照してください。
 
 ---
 

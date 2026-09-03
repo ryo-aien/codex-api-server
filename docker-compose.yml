@@ -20,7 +20,19 @@ services:
     volumes:
       - ./workspaces:/workspaces
       - codex-data:/data
-      - codex-auth:/home/codex/.codex
+      # Codex runtime home (CODEX_HOME=/home/codex/.codex). This MUST be
+      # writable: the Codex runtime creates sqlite state / logs here on start
+      # (state_*.sqlite, logs_*.sqlite, installation_id, ...). We keep it as a
+      # container-only named volume so NONE of that is written to the host.
+      - codex-home:/home/codex/.codex
+      # Only the single auth.json file is bind-mounted (read-only) from the
+      # host, so that `codex login` performed on the HOST is picked up by the
+      # container, WITHOUT the container writing its sqlite/logs to the host.
+      # NOTE: docker compose does NOT expand "~"; set an absolute path in .env,
+      #   e.g. CODEX_AUTH_HOST_DIR=/home/youruser/.codex
+      # The host file must already exist (run `codex login` on the host first),
+      # otherwise Docker would create a directory in its place.
+      - ${CODEX_AUTH_HOST_DIR:?set CODEX_AUTH_HOST_DIR to your host ~/.codex path in .env}/auth.json:/home/codex/.codex/auth.json:ro
     healthcheck:
       test: ["CMD", "curl", "-f", "http://127.0.0.1:8000/health"]
       interval: 30s
@@ -28,9 +40,10 @@ services:
       retries: 3
       start_period: 10s
     restart: unless-stopped
-    # Security: no privileged mode, no host network, no docker.sock,
-    # no host home/credential mounts. See README "Docker security".
+    # Security: no privileged mode, no host network, no docker.sock.
+    # The only host mount is the single Codex auth.json (read-only bind); no
+    # other host credentials are mounted. See README "Docker security".
 
 volumes:
   codex-data:
-  codex-auth:
+  codex-home:

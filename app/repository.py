@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.db import api_keys as api_keys_db
 from app.db import audit as audit_db
+from app.db import chat as chat_db
 from app.db import clients as clients_db
 from app.db import threads as threads_db
 from app.db.connection import Database
@@ -93,6 +94,41 @@ class Repository:
     ) -> list[threads_db.ThreadRecord]:
         return await self._db.run(
             threads_db.list_threads_for_owner,
+            owner_client_id,
+            archived=archived,
+            limit=limit,
+            cursor=cursor,
+        )
+
+    # -- chat conversations --------------------------------------------------
+
+    async def create_conversation(
+        self, conversation_id: str, owner_client_id: str
+    ) -> chat_db.ConversationRecord:
+        return await self._db.run(
+            chat_db.create_conversation, conversation_id, owner_client_id
+        )
+
+    async def get_conversation(
+        self, conversation_id: str
+    ) -> chat_db.ConversationRecord | None:
+        return await self._db.run(chat_db.get_conversation, conversation_id)
+
+    async def touch_conversation(
+        self, conversation_id: str, last_turn_id: str | None
+    ) -> None:
+        await self._db.run(chat_db.touch_conversation, conversation_id, last_turn_id)
+
+    async def list_conversations_for_owner(
+        self,
+        owner_client_id: str,
+        *,
+        archived: bool | None = None,
+        limit: int = 50,
+        cursor: str | None = None,
+    ) -> list[chat_db.ConversationRecord]:
+        return await self._db.run(
+            chat_db.list_conversations_for_owner,
             owner_client_id,
             archived=archived,
             limit=limit,
