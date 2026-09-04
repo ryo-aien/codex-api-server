@@ -49,10 +49,19 @@ class ChatConversationListItem(BaseModel):
     created_at: str
     updated_at: str
     archived: bool
+    first_message_preview: str | None
 
 
 class ChatConversationListResponse(BaseModel):
     conversations: list[ChatConversationListItem]
+
+
+class ChatConversationDeleteResponse(BaseModel):
+    conversation_id: str
+    deleted: bool
+    # Whether the underlying Codex thread was archived. SDK offers archive
+    # (not hard delete), so this reflects best-effort archival on the backend.
+    codex_archived: bool
 
 
 class CreateThreadRequest(BaseModel):

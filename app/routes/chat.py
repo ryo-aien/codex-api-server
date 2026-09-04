@@ -23,6 +23,7 @@ from app.errors import (
 )
 from app.repository import Repository
 from app.schemas import (
+    ChatConversationDeleteResponse,
     ChatConversationListItem,
     ChatConversationListResponse,
     ChatConversationResponse,
@@ -124,7 +125,9 @@ async def start_conversation(
         request.state.audit_result_status = "error"
         raise map_codex_exception(exc) from exc
 
-    await repo.create_conversation(outcome.conversation_id, principal.client_id)
+    await repo.create_conversation(
+        outcome.conversation_id, principal.client_id, first_message=body.prompt
+    )
 
     request.state.audit_thread_id = outcome.conversation_id
     request.state.audit_turn_id = outcome.turn_id
@@ -204,7 +207,48 @@ async def list_conversations(
                 created_at=c.created_at,
                 updated_at=c.updated_at,
                 archived=c.archived,
+                first_message_preview=c.first_message_preview,
             )
             for c in conversations
         ]
+    )
+
+
+@router.delete(
+    "/v1/chat/conversations/{conversation_id}",
+    response_model=ChatConversationDeleteResponse,
+)
+async def delete_conversation(
+    conversation_id: str,
+    request: Request,
+    principal: AuthenticatedPrincipal = Depends(require_auth),
+    repo: Repository = Depends(get_repository),
+    codex_service: CodexServiceProtocol = Depends(get_codex_service),
+) -> ChatConversationDeleteResponse:
+    """Delete one of the caller's own conversations (owner only, 404 otherwise).
+
+    Removes the app's conversation row (hard delete) AND archives the backing
+    Codex thread so it no longer lingers on the backend. The Codex SDK only
+    exposes archive (not hard delete), so archival is best-effort: if it fails
+    the app row is still deleted and codex_archived is reported as false.
+    """
+    await _require_owned_conversation(repo, conversation_id, principal)
+
+    request.state.audit_action = "chat_conversation_delete"
+    request.state.audit_thread_id = conversation_id
+
+    codex_archived = False
+    try:
+        await codex_service.archive_thread(conversation_id)
+        codex_archived = True
+    except CodexError:
+        logger.warning(
+            "Failed to archive Codex thread for conversation %s; deleting app row anyway",
+            conversation_id,
+        )
+
+    await repo.delete_conversation(conversation_id)
+
+    return ChatConversationDeleteResponse(
+        conversation_id=conversation_id, deleted=True, codex_archived=codex_archived
     )

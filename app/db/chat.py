@@ -17,6 +17,15 @@ class ConversationRecord:
     updated_at: str
     archived: bool
     last_turn_id: str | None
+    first_message_preview: str | None
+
+
+PREVIEW_MAX_CHARS = 30
+
+
+def _make_preview(prompt: str) -> str:
+    """First 30 chars of the opening message, for display in the list."""
+    return prompt.strip()[:PREVIEW_MAX_CHARS]
 
 
 def _now() -> str:
@@ -31,21 +40,27 @@ def _row_to_record(row: sqlite3.Row) -> ConversationRecord:
         updated_at=row["updated_at"],
         archived=bool(row["archived"]),
         last_turn_id=row["last_turn_id"],
+        first_message_preview=row["first_message_preview"],
     )
 
 
 def create_conversation(
-    conn: sqlite3.Connection, conversation_id: str, owner_client_id: str
+    conn: sqlite3.Connection,
+    conversation_id: str,
+    owner_client_id: str,
+    first_message: str = "",
 ) -> ConversationRecord:
     now = _now()
+    preview = _make_preview(first_message) if first_message else None
     with conn:
         conn.execute(
             """
             INSERT INTO chat_conversations
-                (conversation_id, owner_client_id, created_at, updated_at, archived)
-            VALUES (?, ?, ?, ?, 0)
+                (conversation_id, owner_client_id, created_at, updated_at, archived,
+                 first_message_preview)
+            VALUES (?, ?, ?, ?, 0, ?)
             """,
-            (conversation_id, owner_client_id, now, now),
+            (conversation_id, owner_client_id, now, now, preview),
         )
     return get_conversation(conn, conversation_id)  # type: ignore[return-value]
 
@@ -66,6 +81,15 @@ def touch_conversation(
         conn.execute(
             "UPDATE chat_conversations SET updated_at = ?, last_turn_id = ? WHERE conversation_id = ?",
             (_now(), last_turn_id, conversation_id),
+        )
+
+
+def delete_conversation(conn: sqlite3.Connection, conversation_id: str) -> None:
+    """Hard-delete a conversation row (ownership is checked by the caller)."""
+    with conn:
+        conn.execute(
+            "DELETE FROM chat_conversations WHERE conversation_id = ?",
+            (conversation_id,),
         )
 
 

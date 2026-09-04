@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_STATEMENTS = [
     """
@@ -84,7 +84,8 @@ _SCHEMA_STATEMENTS = [
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
         archived INTEGER NOT NULL DEFAULT 0,
-        last_turn_id TEXT
+        last_turn_id TEXT,
+        first_message_preview TEXT
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_chat_conversations_owner ON chat_conversations(owner_client_id)",
@@ -101,6 +102,18 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     with conn:
         for statement in _SCHEMA_STATEMENTS:
             conn.execute(statement)
+
+        # schema v3: add first_message_preview to chat_conversations for DBs
+        # created before it was part of the CREATE. Idempotent: only ALTER when
+        # the column is missing (CREATE IF NOT EXISTS won't add columns).
+        existing_columns = {
+            r["name"]
+            for r in conn.execute("PRAGMA table_info(chat_conversations)").fetchall()
+        }
+        if "first_message_preview" not in existing_columns:
+            conn.execute(
+                "ALTER TABLE chat_conversations ADD COLUMN first_message_preview TEXT"
+            )
 
         row = conn.execute("SELECT schema_version FROM schema_meta WHERE id = 1").fetchone()
         if row is None:

@@ -103,10 +103,10 @@ class Repository:
     # -- chat conversations --------------------------------------------------
 
     async def create_conversation(
-        self, conversation_id: str, owner_client_id: str
+        self, conversation_id: str, owner_client_id: str, first_message: str = ""
     ) -> chat_db.ConversationRecord:
         return await self._db.run(
-            chat_db.create_conversation, conversation_id, owner_client_id
+            chat_db.create_conversation, conversation_id, owner_client_id, first_message
         )
 
     async def get_conversation(
@@ -118,6 +118,9 @@ class Repository:
         self, conversation_id: str, last_turn_id: str | None
     ) -> None:
         await self._db.run(chat_db.touch_conversation, conversation_id, last_turn_id)
+
+    async def delete_conversation(self, conversation_id: str) -> None:
+        await self._db.run(chat_db.delete_conversation, conversation_id)
 
     async def list_conversations_for_owner(
         self,

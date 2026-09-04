@@ -181,12 +181,6 @@ docker compose exec codex-api python -m cli.api_keys create alice
   SERVER_IP=$(ipconfig getifaddr en0)   # Wi-Fi。有線なら en1
   ```
 
-- Linux:
-
-  ```bash
-  SERVER_IP=$(hostname -I | awk '{print $1}')
-  ```
-
 設定できたか確認します:
 
 ```bash

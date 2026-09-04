@@ -124,6 +124,30 @@ async def test_conversation_start_returns_id(app_client, repo, test_settings):
 
 
 @pytest.mark.asyncio
+async def test_conversation_list_includes_preview(app_client, repo, test_settings):
+    http_client, _app = app_client
+    _c, raw_key, _kid = await create_client_with_key(repo, test_settings, "alice")
+
+    long_prompt = "これはとても長い最初のメッセージで三十文字を超える内容を含んでいます"
+    started = await http_client.post(
+        "/v1/chat/conversations",
+        headers={"Authorization": f"Bearer {raw_key}"},
+        json={"prompt": long_prompt},
+    )
+    conv_id = started.json()["conversation_id"]
+
+    listing = await http_client.get(
+        "/v1/chat/conversations", headers={"Authorization": f"Bearer {raw_key}"}
+    )
+    item = next(
+        c for c in listing.json()["conversations"] if c["conversation_id"] == conv_id
+    )
+    assert item["first_message_preview"] == long_prompt[:30]
+    assert len(item["first_message_preview"]) == 30
+    assert "created_at" in item and "updated_at" in item
+
+
+@pytest.mark.asyncio
 async def test_conversation_continues_with_context(app_client, repo, test_settings):
     http_client, _app = app_client
     _c, raw_key, _kid = await create_client_with_key(repo, test_settings, "alice")
@@ -208,3 +232,100 @@ async def test_list_conversations_only_own(app_client, repo, test_settings):
     )
     assert len(alice_list.json()["conversations"]) == 2
     assert len(bob_list.json()["conversations"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_delete_conversation_removes_it(app_client, repo, test_settings):
+    http_client, _app = app_client
+    _c, raw_key, _kid = await create_client_with_key(repo, test_settings, "alice")
+
+    started = await http_client.post(
+        "/v1/chat/conversations",
+        headers={"Authorization": f"Bearer {raw_key}"},
+        json={"prompt": "to be deleted"},
+    )
+    conv_id = started.json()["conversation_id"]
+
+    deleted = await http_client.request(
+        "DELETE",
+        f"/v1/chat/conversations/{conv_id}",
+        headers={"Authorization": f"Bearer {raw_key}"},
+    )
+    assert deleted.status_code == 200
+    assert deleted.json() == {
+        "conversation_id": conv_id,
+        "deleted": True,
+        "codex_archived": True,
+    }
+
+    # gone from the list and from the DB
+    listing = await http_client.get(
+        "/v1/chat/conversations", headers={"Authorization": f"Bearer {raw_key}"}
+    )
+    assert all(c["conversation_id"] != conv_id for c in listing.json()["conversations"])
+    assert await repo.get_conversation(conv_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_still_removes_row_when_codex_archive_fails(
+    app_client, repo, test_settings, fake_codex_service
+):
+    http_client, _app = app_client
+    _c, raw_key, _kid = await create_client_with_key(repo, test_settings, "alice")
+
+    started = await http_client.post(
+        "/v1/chat/conversations",
+        headers={"Authorization": f"Bearer {raw_key}"},
+        json={"prompt": "will be deleted"},
+    )
+    conv_id = started.json()["conversation_id"]
+
+    # Codex archival fails, but the app row must still be deleted (best-effort).
+    fake_codex_service.archive_fails = True
+
+    deleted = await http_client.request(
+        "DELETE",
+        f"/v1/chat/conversations/{conv_id}",
+        headers={"Authorization": f"Bearer {raw_key}"},
+    )
+    assert deleted.status_code == 200
+    body = deleted.json()
+    assert body["deleted"] is True
+    assert body["codex_archived"] is False
+    assert await repo.get_conversation(conv_id) is None
+
+
+@pytest.mark.asyncio
+async def test_delete_other_users_conversation_404(app_client, repo, test_settings):
+    http_client, _app = app_client
+    _a, alice_key, _ = await create_client_with_key(repo, test_settings, "alice")
+    _b, bob_key, _ = await create_client_with_key(repo, test_settings, "bob")
+
+    started = await http_client.post(
+        "/v1/chat/conversations",
+        headers={"Authorization": f"Bearer {alice_key}"},
+        json={"prompt": "alice's"},
+    )
+    conv_id = started.json()["conversation_id"]
+
+    response = await http_client.request(
+        "DELETE",
+        f"/v1/chat/conversations/{conv_id}",
+        headers={"Authorization": f"Bearer {bob_key}"},
+    )
+    assert response.status_code == 404
+    # alice's conversation is still there
+    assert await repo.get_conversation(conv_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_delete_nonexistent_conversation_404(app_client, repo, test_settings):
+    http_client, _app = app_client
+    _c, raw_key, _kid = await create_client_with_key(repo, test_settings, "alice")
+
+    response = await http_client.request(
+        "DELETE",
+        "/v1/chat/conversations/thr_missing",
+        headers={"Authorization": f"Bearer {raw_key}"},
+    )
+    assert response.status_code == 404

@@ -12,6 +12,8 @@ from httpx import ASGITransport, AsyncClient
 os.environ.setdefault("API_KEY_PEPPER", "test-pepper-0123456789abcdef")
 os.environ.setdefault("CODEX_AUTH_MODE", "chatgpt")
 
+from openai_codex.errors import CodexError
+
 from app.codex.service import ChatOutcome, ChatStartOutcome, TurnOutcome
 from app.concurrency import JobLimiter
 from app.config import Settings
@@ -47,6 +49,7 @@ class FakeCodexService:
         self._turn_counter = itertools.count(1)
         self.sleep_seconds: float = 0.0
         self.fail_with: Exception | None = None
+        self.archive_fails: bool = False
         self.interrupted_threads: set[str] = set()
         self._account_status = {"authenticated": True, "auth_mode": "chatgpt"}
         # conversation_id -> list of prompts, so tests can assert that resume
@@ -146,6 +149,8 @@ class FakeCodexService:
         return True
 
     async def archive_thread(self, thread_id: str) -> None:
+        if self.archive_fails:
+            raise CodexError("archive failed")
         return None
 
     async def account_status(self) -> dict:
